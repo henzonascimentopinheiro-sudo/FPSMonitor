@@ -4,11 +4,11 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="FPS Monitor Overlay"
         Width="250"
-        Height="115"
+        Height="125"
         MinWidth="250"
-        MinHeight="115"
+        MinHeight="125"
         MaxWidth="250"
-        MaxHeight="115"
+        MaxHeight="125"
         WindowStyle="None"
         ResizeMode="NoResize"
         AllowsTransparency="True"
@@ -65,6 +65,7 @@
                     <TextBlock Text="FPS"
                                FontSize="10"
                                Foreground="#AAAAAA"/>
+
                     <TextBlock x:Name="FpsText"
                                Text="--"
                                FontSize="29"
@@ -76,6 +77,7 @@
                     <TextBlock Text="CPU"
                                FontSize="10"
                                Foreground="#AAAAAA"/>
+
                     <TextBlock x:Name="CpuText"
                                Text="--%"
                                FontSize="14"
@@ -86,6 +88,7 @@
                                FontSize="10"
                                Foreground="#AAAAAA"
                                Margin="0,4,0,0"/>
+
                     <TextBlock x:Name="RamText"
                                Text="-- MB"
                                FontSize="12"
