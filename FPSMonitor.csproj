@@ -14,10 +14,11 @@
                       Version="8.0.1" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Include="PresentMon.exe"
-             CopyToOutputDirectory="PreserveNewest"
-             CopyToPublishDirectory="PreserveNewest" />
+  <ItemGroup Condition="Exists('PresentMon.exe')">
+    <Content Include="PresentMon.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>
