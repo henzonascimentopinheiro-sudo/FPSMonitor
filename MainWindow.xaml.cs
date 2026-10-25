@@ -17,11 +17,10 @@ namespace FPSMonitor
         {
             InitializeComponent();
 
-            // Configura o overlay.
             Topmost = true;
             ShowInTaskbar = true;
 
-            // Começa oculto até encontrar o Roblox.
+            // O overlay começa oculto.
             Hide();
 
             timer.Interval = TimeSpan.FromSeconds(1);
@@ -66,7 +65,9 @@ namespace FPSMonitor
             }
         }
 
-        private void FecharOverlay_Click(object sender, RoutedEventArgs e)
+        private void FecharOverlay_Click(
+            object sender,
+            RoutedEventArgs e)
         {
             Close();
         }
@@ -75,7 +76,6 @@ namespace FPSMonitor
         {
             timer.Stop();
             monitor.Dispose();
-
             base.OnClosed(e);
         }
     }
