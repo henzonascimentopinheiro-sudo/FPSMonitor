@@ -17,6 +17,8 @@ namespace FPSMonitor
         private Process? presentMon;
         private bool robloxAberto;
         private int colunaFrameTime = -1;
+        private bool cabecalhoEncontrado;
+        private readonly object sync = new();
 
         public MainWindow()
         {
@@ -25,7 +27,6 @@ namespace FPSMonitor
             WindowStartupLocation = WindowStartupLocation.Manual;
             PosicionarOverlay();
             Topmost = true;
-
             Hide();
 
             timer.Interval = TimeSpan.FromSeconds(1);
@@ -56,8 +57,7 @@ namespace FPSMonitor
 
             try
             {
-                aberto = Process.GetProcessesByName(
-                    "RobloxPlayerBeta").Any();
+                aberto = Process.GetProcessesByName("RobloxPlayerBeta").Any();
             }
             catch
             {
@@ -86,6 +86,12 @@ namespace FPSMonitor
         {
             PararPresentMon();
 
+            lock (sync)
+            {
+                colunaFrameTime = -1;
+                cabecalhoEncontrado = false;
+            }
+
             string caminho = Path.Combine(
                 AppContext.BaseDirectory,
                 "PresentMon.exe");
@@ -106,6 +112,7 @@ namespace FPSMonitor
                         "--output_stdout --v1_metrics --no_console_stats",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
+                    RedirectStandardError = true,
                     CreateNoWindow = true
                 };
 
@@ -116,12 +123,21 @@ namespace FPSMonitor
                 };
 
                 presentMon.OutputDataReceived += LerSaidaPresentMon;
-                presentMon.Start();
+                presentMon.ErrorDataReceived += (_, _) => { };
+
+                if (!presentMon.Start())
+                {
+                    FpsText.Text = "ERRO";
+                    return;
+                }
+
                 presentMon.BeginOutputReadLine();
+                presentMon.BeginErrorReadLine();
             }
             catch
             {
                 FpsText.Text = "ERRO";
+                PararPresentMon();
             }
         }
 
@@ -132,59 +148,78 @@ namespace FPSMonitor
             if (string.IsNullOrWhiteSpace(e.Data))
                 return;
 
-            string linha = e.Data;
+            string linha = e.Data.Trim();
 
             if (linha.StartsWith("Application,", StringComparison.OrdinalIgnoreCase))
             {
                 string[] cabecalho = linha.Split(',');
 
-                colunaFrameTime = Array.FindIndex(
+                int coluna = Array.FindIndex(
                     cabecalho,
-                    coluna => coluna.Trim().Equals(
+                    nome => nome.Trim().Equals(
                         "MsBetweenPresents",
                         StringComparison.OrdinalIgnoreCase));
+
+                lock (sync)
+                {
+                    colunaFrameTime = coluna;
+                    cabecalhoEncontrado = true;
+                }
 
                 return;
             }
 
-            if (colunaFrameTime < 0)
+            int indice;
+
+            lock (sync)
+            {
+                if (!cabecalhoEncontrado)
+                    return;
+
+                indice = colunaFrameTime;
+            }
+
+            if (indice < 0)
                 return;
 
             string[] campos = linha.Split(',');
 
-            if (campos.Length <= colunaFrameTime)
+            if (campos.Length <= indice)
                 return;
 
             if (!double.TryParse(
-                    campos[colunaFrameTime].Trim(),
-                    NumberStyles.Float,
-                    CultureInfo.InvariantCulture,
-                    out double milissegundos))
+                campos[indice].Trim(),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out double ms))
                 return;
 
-            if (milissegundos <= 0 || milissegundos > 1000)
+            if (ms <= 0 || ms > 1000)
                 return;
 
-            int fps = (int)Math.Round(1000.0 / milissegundos);
+            int fps = (int)Math.Round(1000.0 / ms);
 
             Dispatcher.BeginInvoke(() =>
             {
-                if (robloxAberto)
+                if (robloxAberto && IsVisible)
                     FpsText.Text = fps.ToString();
             });
         }
 
         private void PararPresentMon()
         {
-            if (presentMon == null)
+            Process? processo = presentMon;
+            presentMon = null;
+
+            if (processo == null)
                 return;
 
             try
             {
-                presentMon.OutputDataReceived -= LerSaidaPresentMon;
+                processo.OutputDataReceived -= LerSaidaPresentMon;
 
-                if (!presentMon.HasExited)
-                    presentMon.Kill(true);
+                if (!processo.HasExited)
+                    processo.Kill(true);
             }
             catch
             {
@@ -192,9 +227,13 @@ namespace FPSMonitor
             }
             finally
             {
-                presentMon.Dispose();
-                presentMon = null;
-                colunaFrameTime = -1;
+                processo.Dispose();
+
+                lock (sync)
+                {
+                    colunaFrameTime = -1;
+                    cabecalhoEncontrado = false;
+                }
             }
         }
 
