@@ -1,0 +1,32 @@
+
+name: Build FPS Monitor
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Instalar .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restaurar dependências
+        run: dotnet restore FPSMonitor.csproj
+
+      - name: Compilar aplicativo
+        run: dotnet publish FPSMonitor.csproj -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Disponibilizar executável
+        uses: actions/upload-artifact@v4
+        with:
+          name: FPSMonitor-Windows
+          path: publish/
