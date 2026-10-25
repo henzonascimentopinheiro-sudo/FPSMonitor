@@ -3,7 +3,7 @@ name: Build FPS Monitor
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
@@ -17,7 +17,20 @@ jobs:
       - name: Instalar .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: "8.0.x"
+
+      - name: Verificar arquivos do projeto
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "FPSMonitor.csproj")) {
+            throw "FPSMonitor.csproj não foi encontrado."
+          }
+
+          if (Test-Path "PresentMon.exe") {
+            Write-Host "PresentMon.exe encontrado."
+          } else {
+            Write-Warning "PresentMon.exe não foi encontrado na raiz do projeto. O app poderá abrir sem obter FPS."
+          }
 
       - name: Restaurar dependências
         run: dotnet restore FPSMonitor.csproj
@@ -30,3 +43,4 @@ jobs:
         with:
           name: FPSMonitor-Windows
           path: publish/
+          if-no-files-found: error
