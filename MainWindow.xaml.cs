@@ -11,16 +11,18 @@ namespace FPSMonitor
     {
         private readonly SystemMonitor monitor = new();
         private readonly DispatcherTimer timer = new();
-
         private bool robloxAberto;
 
         public MainWindow()
         {
             InitializeComponent();
 
-            // Configura o overlay
+            // Configura o overlay.
             Topmost = true;
             ShowInTaskbar = true;
+
+            // Começa oculto até encontrar o Roblox.
+            Hide();
 
             timer.Interval = TimeSpan.FromSeconds(1);
             timer.Tick += AtualizarDados;
@@ -40,23 +42,33 @@ namespace FPSMonitor
                 RamText.Text = "N/D";
             }
 
-            // Detecta se o Roblox está aberto
-            bool aberto = Process.GetProcessesByName("RobloxPlayerBeta").Any();
+            bool aberto;
 
-            if (aberto != robloxAberto)
+            try
             {
-                robloxAberto = aberto;
-
-                if (robloxAberto)
-                {
-                    Show();
-                    Topmost = true;
-                }
-                else
-                {
-                    Hide();
-                }
+                aberto = Process.GetProcessesByName("RobloxPlayerBeta").Any();
             }
+            catch
+            {
+                aberto = false;
+            }
+
+            if (aberto && !robloxAberto)
+            {
+                robloxAberto = true;
+                Show();
+                Topmost = true;
+            }
+            else if (!aberto && robloxAberto)
+            {
+                robloxAberto = false;
+                Hide();
+            }
+        }
+
+        private void FecharOverlay_Click(object sender, RoutedEventArgs e)
+        {
+            Close();
         }
 
         protected override void OnClosed(EventArgs e)
