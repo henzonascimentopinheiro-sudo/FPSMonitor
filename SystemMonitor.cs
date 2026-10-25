@@ -7,25 +7,23 @@ namespace FPSMonitor
     public class SystemMonitor : IDisposable
     {
         private readonly PerformanceCounter cpuCounter =
-            new PerformanceCounter(
-                "Processor",
-                "% Processor Time",
-                "_Total");
+            new("Processor", "% Processor Time", "_Total");
+
+        public SystemMonitor()
+        {
+            cpuCounter.NextValue();
+        }
 
         public float GetCpuUsage()
         {
-            return Math.Clamp(
-                cpuCounter.NextValue(),
-                0f,
-                100f);
+            return Math.Clamp(cpuCounter.NextValue(), 0f, 100f);
         }
 
         public float GetRamUsage()
         {
             using var process = Process.GetCurrentProcess();
 
-            return process.WorkingSet64 /
-                   1024f / 1024f;
+            return process.WorkingSet64 / 1024f / 1024f;
         }
 
         public void Dispose()
