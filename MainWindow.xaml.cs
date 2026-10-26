@@ -1,6 +1,4 @@
-```csharp
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -8,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
+using System.Collections.Generic;
 
 namespace FPSMonitor
 {
@@ -23,16 +22,12 @@ namespace FPSMonitor
         private int colunaAplicacao = -1;
 
         private readonly object sync = new();
-
-        // Armazena os tempos dos frames recebidos.
         private readonly Queue<double> temposFrames = new();
 
         private double somaTemposFrames;
         private DateTime ultimaAtualizacaoFps = DateTime.MinValue;
 
-        private const double JANELA_FPS_SEGUNDOS = 1.0;
-        private const double FPS_MINIMO_VALIDO = 1.0;
-        private const double FPS_MAXIMO_VALIDO = 1000.0;
+        private const double JANELA_FPS_MS = 1000.0;
 
         private string CaminhoLog =>
             Path.Combine(
@@ -46,7 +41,6 @@ namespace FPSMonitor
 
             WindowStartupLocation = WindowStartupLocation.Manual;
             PosicionarOverlay();
-
             Topmost = true;
             Hide();
 
@@ -72,19 +66,6 @@ namespace FPSMonitor
             }
             catch
             {
-                // O log é opcional.
-            }
-        }
-
-        private void LimparDadosFps()
-        {
-            lock (sync)
-            {
-                temposFrames.Clear();
-                somaTemposFrames = 0;
-                ultimaAtualizacaoFps = DateTime.MinValue;
-                colunaFrameTime = -1;
-                colunaAplicacao = -1;
             }
         }
 
@@ -195,6 +176,18 @@ namespace FPSMonitor
             }
         }
 
+        private void LimparDadosFps()
+        {
+            lock (sync)
+            {
+                temposFrames.Clear();
+                somaTemposFrames = 0;
+                ultimaAtualizacaoFps = DateTime.MinValue;
+                colunaFrameTime = -1;
+                colunaAplicacao = -1;
+            }
+        }
+
         private void LerErroPresentMon(
             object sender,
             DataReceivedEventArgs e)
@@ -213,10 +206,8 @@ namespace FPSMonitor
                 return;
 
             string linha = e.Data.Trim();
-
             string[] campos = linha.Split(',');
 
-            // Identifica o cabeçalho CSV.
             if (campos.Any(c =>
                 c.Trim().Trim('"').Equals(
                     "Application",
@@ -277,7 +268,6 @@ namespace FPSMonitor
             if (colunaTempo < 0 || campos.Length <= colunaTempo)
                 return;
 
-            // Se houver nome de aplicação na linha, ignora outros processos.
             if (colunaApp >= 0 && campos.Length > colunaApp)
             {
                 string aplicacao = campos[colunaApp].Trim().Trim('"');
@@ -318,10 +308,8 @@ namespace FPSMonitor
                 temposFrames.Enqueue(milissegundos);
                 somaTemposFrames += milissegundos;
 
-                // Mantém aproximadamente um segundo de tempo acumulado.
                 while (temposFrames.Count > 1 &&
-                       somaTemposFrames - temposFrames.Peek() >=
-                       JANELA_FPS_SEGUNDOS * 1000.0)
+                       somaTemposFrames - temposFrames.Peek() >= JANELA_FPS_MS)
                 {
                     somaTemposFrames -= temposFrames.Dequeue();
                 }
@@ -333,15 +321,12 @@ namespace FPSMonitor
 
                 ultimaAtualizacaoFps = agora;
 
-                // FPS médio = quantidade de frames / duração total.
                 if (somaTemposFrames > 0 && temposFrames.Count > 0)
                 {
                     double fps =
                         temposFrames.Count * 1000.0 / somaTemposFrames;
 
-                    if (double.IsFinite(fps) &&
-                        fps >= FPS_MINIMO_VALIDO &&
-                        fps <= FPS_MAXIMO_VALIDO)
+                    if (double.IsFinite(fps) && fps >= 1 && fps <= 1000)
                     {
                         fpsCalculado = (int)Math.Round(fps);
                     }
@@ -390,7 +375,6 @@ namespace FPSMonitor
             {
                 processo.Dispose();
                 LimparDadosFps();
-
                 RegistrarLog("PresentMon encerrado.");
             }
         }
@@ -412,4 +396,3 @@ namespace FPSMonitor
         }
     }
 }
-```
