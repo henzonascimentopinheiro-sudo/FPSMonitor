@@ -1,5 +1,6 @@
-
+```csharp
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -17,8 +18,21 @@ namespace FPSMonitor
 
         private Process? presentMon;
         private bool robloxAberto;
+
         private int colunaFrameTime = -1;
+        private int colunaAplicacao = -1;
+
         private readonly object sync = new();
+
+        // Armazena os tempos dos frames recebidos.
+        private readonly Queue<double> temposFrames = new();
+
+        private double somaTemposFrames;
+        private DateTime ultimaAtualizacaoFps = DateTime.MinValue;
+
+        private const double JANELA_FPS_SEGUNDOS = 1.0;
+        private const double FPS_MINIMO_VALIDO = 1.0;
+        private const double FPS_MAXIMO_VALIDO = 1000.0;
 
         private string CaminhoLog =>
             Path.Combine(
@@ -32,6 +46,7 @@ namespace FPSMonitor
 
             WindowStartupLocation = WindowStartupLocation.Manual;
             PosicionarOverlay();
+
             Topmost = true;
             Hide();
 
@@ -58,6 +73,18 @@ namespace FPSMonitor
             catch
             {
                 // O log é opcional.
+            }
+        }
+
+        private void LimparDadosFps()
+        {
+            lock (sync)
+            {
+                temposFrames.Clear();
+                somaTemposFrames = 0;
+                ultimaAtualizacaoFps = DateTime.MinValue;
+                colunaFrameTime = -1;
+                colunaAplicacao = -1;
             }
         }
 
@@ -110,11 +137,7 @@ namespace FPSMonitor
         private void IniciarPresentMon()
         {
             PararPresentMon();
-
-            lock (sync)
-            {
-                colunaFrameTime = -1;
-            }
+            LimparDadosFps();
 
             string caminho = Path.Combine(
                 AppContext.BaseDirectory,
@@ -191,60 +214,84 @@ namespace FPSMonitor
 
             string linha = e.Data.Trim();
 
-            // Salva o cabeçalho e algumas informações úteis
-            // para diagnosticar incompatibilidades de versão.
-            if (linha.Contains("Application", StringComparison.OrdinalIgnoreCase))
-            {
-                RegistrarLog("CSV: " + linha);
-            }
-
             string[] campos = linha.Split(',');
 
-            // O cabeçalho pode variar conforme a versão/métrica.
+            // Identifica o cabeçalho CSV.
             if (campos.Any(c =>
                 c.Trim().Trim('"').Equals(
                     "Application",
                     StringComparison.OrdinalIgnoreCase)))
             {
-                int indice = Array.FindIndex(
+                int indiceFrameTime = Array.FindIndex(
                     campos,
                     c =>
                     {
                         string nome = c.Trim().Trim('"');
 
                         return nome.Equals(
-                                   "FrameTime",
+                                   "MsBetweenPresents",
                                    StringComparison.OrdinalIgnoreCase)
                                || nome.Equals(
-                                   "MsBetweenPresents",
+                                   "FrameTime",
                                    StringComparison.OrdinalIgnoreCase);
                     });
 
+                int indiceAplicacao = Array.FindIndex(
+                    campos,
+                    c => c.Trim().Trim('"').Equals(
+                        "Application",
+                        StringComparison.OrdinalIgnoreCase));
+
                 lock (sync)
                 {
-                    colunaFrameTime = indice;
+                    colunaFrameTime = indiceFrameTime;
+                    colunaAplicacao = indiceAplicacao;
+
+                    temposFrames.Clear();
+                    somaTemposFrames = 0;
+                    ultimaAtualizacaoFps = DateTime.MinValue;
                 }
 
                 RegistrarLog(
-                    indice >= 0
-                        ? $"Coluna de tempo de frame encontrada: {campos[indice]}"
-                        : "Cabeçalho recebido, mas não encontrei FrameTime ou MsBetweenPresents.");
+                    $"Cabeçalho CSV recebido. Aplicação={indiceAplicacao}, " +
+                    $"tempo entre frames={indiceFrameTime}.");
+
+                if (indiceFrameTime < 0)
+                {
+                    RegistrarLog(
+                        "AVISO: nenhuma coluna de tempo entre frames reconhecida.");
+                }
 
                 return;
             }
 
-            int coluna;
+            int colunaTempo;
+            int colunaApp;
 
             lock (sync)
             {
-                coluna = colunaFrameTime;
+                colunaTempo = colunaFrameTime;
+                colunaApp = colunaAplicacao;
             }
 
-            if (coluna < 0 || campos.Length <= coluna)
+            if (colunaTempo < 0 || campos.Length <= colunaTempo)
                 return;
 
+            // Se houver nome de aplicação na linha, ignora outros processos.
+            if (colunaApp >= 0 && campos.Length > colunaApp)
+            {
+                string aplicacao = campos[colunaApp].Trim().Trim('"');
+
+                if (!aplicacao.Equals(
+                    "RobloxPlayerBeta.exe",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
             if (!double.TryParse(
-                campos[coluna].Trim().Trim('"'),
+                campos[colunaTempo].Trim().Trim('"'),
                 NumberStyles.Float,
                 CultureInfo.InvariantCulture,
                 out double milissegundos))
@@ -252,19 +299,68 @@ namespace FPSMonitor
                 return;
             }
 
-            if (milissegundos <= 0 || milissegundos > 1000)
-                return;
-
-            int fps = (int)Math.Round(1000.0 / milissegundos);
-
-            Dispatcher.BeginInvoke(() =>
+            if (!double.IsFinite(milissegundos) ||
+                milissegundos <= 0 ||
+                milissegundos > 1000)
             {
-                if (robloxAberto && IsVisible)
+                return;
+            }
+
+            AdicionarFrame(milissegundos);
+        }
+
+        private void AdicionarFrame(double milissegundos)
+        {
+            int? fpsCalculado = null;
+
+            lock (sync)
+            {
+                temposFrames.Enqueue(milissegundos);
+                somaTemposFrames += milissegundos;
+
+                // Mantém aproximadamente um segundo de tempo acumulado.
+                while (temposFrames.Count > 1 &&
+                       somaTemposFrames - temposFrames.Peek() >=
+                       JANELA_FPS_SEGUNDOS * 1000.0)
                 {
-                    FpsText.Text = fps.ToString(
-                        CultureInfo.InvariantCulture);
+                    somaTemposFrames -= temposFrames.Dequeue();
                 }
-            });
+
+                DateTime agora = DateTime.UtcNow;
+
+                if ((agora - ultimaAtualizacaoFps).TotalMilliseconds < 250)
+                    return;
+
+                ultimaAtualizacaoFps = agora;
+
+                // FPS médio = quantidade de frames / duração total.
+                if (somaTemposFrames > 0 && temposFrames.Count > 0)
+                {
+                    double fps =
+                        temposFrames.Count * 1000.0 / somaTemposFrames;
+
+                    if (double.IsFinite(fps) &&
+                        fps >= FPS_MINIMO_VALIDO &&
+                        fps <= FPS_MAXIMO_VALIDO)
+                    {
+                        fpsCalculado = (int)Math.Round(fps);
+                    }
+                }
+            }
+
+            if (fpsCalculado.HasValue)
+            {
+                int valor = fpsCalculado.Value;
+
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (robloxAberto && IsVisible)
+                    {
+                        FpsText.Text = valor.ToString(
+                            CultureInfo.InvariantCulture);
+                    }
+                });
+            }
         }
 
         private void PararPresentMon()
@@ -293,11 +389,7 @@ namespace FPSMonitor
             finally
             {
                 processo.Dispose();
-
-                lock (sync)
-                {
-                    colunaFrameTime = -1;
-                }
+                LimparDadosFps();
 
                 RegistrarLog("PresentMon encerrado.");
             }
@@ -320,3 +412,4 @@ namespace FPSMonitor
         }
     }
 }
+```
