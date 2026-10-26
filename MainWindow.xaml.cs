@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -6,7 +7,6 @@ using System.Linq;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
-using System.Collections.Generic;
 
 namespace FPSMonitor
 {
@@ -17,6 +17,8 @@ namespace FPSMonitor
 
         private Process? presentMon;
         private bool robloxAberto;
+        private bool encerrando;
+        private bool erroCaptura;
 
         private int colunaFrameTime = -1;
         private int colunaAplicacao = -1;
@@ -26,8 +28,6 @@ namespace FPSMonitor
 
         private double somaTemposFrames;
         private DateTime ultimaAtualizacaoFps = DateTime.MinValue;
-
-        private const double JANELA_FPS_MS = 1000.0;
 
         private string CaminhoLog =>
             Path.Combine(
@@ -41,6 +41,7 @@ namespace FPSMonitor
 
             WindowStartupLocation = WindowStartupLocation.Manual;
             PosicionarOverlay();
+
             Topmost = true;
             Hide();
 
@@ -66,7 +67,17 @@ namespace FPSMonitor
             }
             catch
             {
+                // O log é opcional.
             }
+        }
+
+        private void MostrarEstado(string estado)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (robloxAberto && IsVisible)
+                    FpsText.Text = estado;
+            });
         }
 
         private void AtualizarDados(object? sender, EventArgs e)
@@ -115,10 +126,25 @@ namespace FPSMonitor
             }
         }
 
+        private void LimparDadosFps()
+        {
+            lock (sync)
+            {
+                temposFrames.Clear();
+                somaTemposFrames = 0;
+                ultimaAtualizacaoFps = DateTime.MinValue;
+                colunaFrameTime = -1;
+                colunaAplicacao = -1;
+            }
+        }
+
         private void IniciarPresentMon()
         {
             PararPresentMon();
             LimparDadosFps();
+
+            erroCaptura = false;
+            encerrando = false;
 
             string caminho = Path.Combine(
                 AppContext.BaseDirectory,
@@ -135,66 +161,110 @@ namespace FPSMonitor
 
             try
             {
+                // Cada instância recebe uma sessão ETW exclusiva.
+                string nomeSessao = $"FPSMonitor_{Environment.ProcessId}";
+
                 var inicio = new ProcessStartInfo
                 {
                     FileName = caminho,
                     Arguments =
                         "--process_name RobloxPlayerBeta " +
-                        "--output_stdout --v2_metrics --no_console_stats",
+                        "--output_stdout --v2_metrics --no_console_stats " +
+                        $"--session_name {nomeSessao}",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     CreateNoWindow = true
                 };
 
-                presentMon = new Process
+                var processo = new Process
                 {
                     StartInfo = inicio,
                     EnableRaisingEvents = true
                 };
 
-                presentMon.OutputDataReceived += LerSaidaPresentMon;
-                presentMon.ErrorDataReceived += LerErroPresentMon;
+                processo.OutputDataReceived += LerSaidaPresentMon;
+                processo.ErrorDataReceived += LerErroPresentMon;
+                processo.Exited += PresentMon_Exited;
 
-                if (!presentMon.Start())
+                if (!processo.Start())
                 {
-                    FpsText.Text = "ERRO";
+                    processo.Dispose();
+                    FpsText.Text = "ERRO PM";
                     RegistrarLog("Não foi possível iniciar PresentMon.");
                     return;
                 }
 
-                presentMon.BeginOutputReadLine();
-                presentMon.BeginErrorReadLine();
+                presentMon = processo;
 
-                RegistrarLog("PresentMon iniciado.");
+                processo.BeginOutputReadLine();
+                processo.BeginErrorReadLine();
+
+                RegistrarLog(
+                    $"PresentMon iniciado. Sessão: {nomeSessao}");
             }
             catch (Exception ex)
             {
-                FpsText.Text = "ERRO";
-                RegistrarLog("Erro ao iniciar: " + ex.Message);
+                FpsText.Text = "ERRO PM";
+                RegistrarLog("Erro ao iniciar PresentMon: " + ex);
                 PararPresentMon();
             }
         }
 
-        private void LimparDadosFps()
+        private void PresentMon_Exited(object? sender, EventArgs e)
         {
-            lock (sync)
+            if (encerrando)
+                return;
+
+            int codigo = -1;
+
+            try
             {
-                temposFrames.Clear();
-                somaTemposFrames = 0;
-                ultimaAtualizacaoFps = DateTime.MinValue;
-                colunaFrameTime = -1;
-                colunaAplicacao = -1;
+                if (sender is Process p)
+                    codigo = p.ExitCode;
             }
+            catch
+            {
+                // O processo pode já ter sido descartado.
+            }
+
+            RegistrarLog(
+                $"PresentMon terminou inesperadamente. Código: {codigo}");
+
+            MostrarEstado(erroCaptura ? "SEM PERM." : "ERRO PM");
         }
 
         private void LerErroPresentMon(
             object sender,
             DataReceivedEventArgs e)
         {
-            if (!string.IsNullOrWhiteSpace(e.Data))
+            if (string.IsNullOrWhiteSpace(e.Data))
+                return;
+
+            string mensagem = e.Data.Trim();
+            RegistrarLog("PresentMon stderr: " + mensagem);
+
+            if (mensagem.Contains(
+                    "access denied",
+                    StringComparison.OrdinalIgnoreCase) ||
+                mensagem.Contains(
+                    "elevated privilege",
+                    StringComparison.OrdinalIgnoreCase) ||
+                mensagem.Contains(
+                    "administrative privileges",
+                    StringComparison.OrdinalIgnoreCase) ||
+                mensagem.Contains(
+                    "Performance Log Users",
+                    StringComparison.OrdinalIgnoreCase))
             {
-                RegistrarLog("PresentMon stderr: " + e.Data);
+                erroCaptura = true;
+                MostrarEstado("SEM PERM.");
+            }
+            else if (mensagem.Contains(
+                         "already running",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                MostrarEstado("SESSÃO");
             }
         }
 
@@ -208,6 +278,7 @@ namespace FPSMonitor
             string linha = e.Data.Trim();
             string[] campos = linha.Split(',');
 
+            // Identifica o cabeçalho CSV da versão instalada.
             if (campos.Any(c =>
                 c.Trim().Trim('"').Equals(
                     "Application",
@@ -237,20 +308,23 @@ namespace FPSMonitor
                 {
                     colunaFrameTime = indiceFrameTime;
                     colunaAplicacao = indiceAplicacao;
-
                     temposFrames.Clear();
                     somaTemposFrames = 0;
                     ultimaAtualizacaoFps = DateTime.MinValue;
                 }
 
-                RegistrarLog(
-                    $"Cabeçalho CSV recebido. Aplicação={indiceAplicacao}, " +
-                    $"tempo entre frames={indiceFrameTime}.");
+                RegistrarLog("CSV: " + linha);
 
                 if (indiceFrameTime < 0)
                 {
                     RegistrarLog(
-                        "AVISO: nenhuma coluna de tempo entre frames reconhecida.");
+                        "Nenhuma coluna FrameTime ou MsBetweenPresents encontrada.");
+                    MostrarEstado("SEM DADO");
+                }
+                else
+                {
+                    RegistrarLog(
+                        $"Coluna de tempo encontrada: {campos[indiceFrameTime]}");
                 }
 
                 return;
@@ -273,18 +347,18 @@ namespace FPSMonitor
                 string aplicacao = campos[colunaApp].Trim().Trim('"');
 
                 if (!aplicacao.Equals(
-                    "RobloxPlayerBeta.exe",
-                    StringComparison.OrdinalIgnoreCase))
+                        "RobloxPlayerBeta.exe",
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     return;
                 }
             }
 
             if (!double.TryParse(
-                campos[colunaTempo].Trim().Trim('"'),
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out double milissegundos))
+                    campos[colunaTempo].Trim().Trim('"'),
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out double milissegundos))
             {
                 return;
             }
@@ -308,8 +382,9 @@ namespace FPSMonitor
                 temposFrames.Enqueue(milissegundos);
                 somaTemposFrames += milissegundos;
 
+                // Mantém aproximadamente um segundo de amostras.
                 while (temposFrames.Count > 1 &&
-                       somaTemposFrames - temposFrames.Peek() >= JANELA_FPS_MS)
+                       somaTemposFrames - temposFrames.Peek() >= 1000.0)
                 {
                     somaTemposFrames -= temposFrames.Dequeue();
                 }
@@ -339,7 +414,7 @@ namespace FPSMonitor
 
                 Dispatcher.BeginInvoke(() =>
                 {
-                    if (robloxAberto && IsVisible)
+                    if (robloxAberto && IsVisible && !erroCaptura)
                     {
                         FpsText.Text = valor.ToString(
                             CultureInfo.InvariantCulture);
@@ -356,15 +431,18 @@ namespace FPSMonitor
             if (processo == null)
                 return;
 
+            encerrando = true;
+
             try
             {
                 processo.OutputDataReceived -= LerSaidaPresentMon;
                 processo.ErrorDataReceived -= LerErroPresentMon;
+                processo.Exited -= PresentMon_Exited;
 
                 if (!processo.HasExited)
                 {
                     processo.Kill(true);
-                    processo.WaitForExit(1500);
+                    processo.WaitForExit(3000);
                 }
             }
             catch (Exception ex)
